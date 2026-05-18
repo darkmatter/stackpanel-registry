@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "flakes": [
+    {
+      "exact": true,
+      "from": {
+        "type": "indirect",
+        "id": "stackpanel"
+      },
+      "to": {
+        "type": "github",
+        "owner": "darkmatter",
+        "repo": "stackpanel"
+      }
+    }
+  ]
+}
