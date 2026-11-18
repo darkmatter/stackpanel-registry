@@ -32,9 +32,17 @@ If the cache directory is unwritable, successfully fetched or revalidated respon
 
    Never publish an incompatible contract change under the v1 URL. Publish a new schema and endpoint instead.
 
+### Run the checks locally
+
+From the registry root, `go run ./cmd/registry-check -catalog-only` checks the schema, catalog alias, module directories, README links, and release pins. It needs Go and Git (including the release tags), but not Nix.
+
+Run `go run ./cmd/registry-check` for the full CI check. It locks a temporary consumer, verifies that sibling inputs come from this checkout, validates each module with the SDK, and builds the Rust, archetype, and language suites. The default target is `x86_64-linux`; use `-system aarch64-darwin` to build on Apple Silicon. Nix reads Git-tracked files, so stage new module files before running. The checker does not modify this repository’s lockfiles.
+
 ### Coordinated SDK and registry changes
 
 Ordinary PRs validate against `darkmatter/stackpanel` on `main`. If the registry needs an unpublished SDK change, run **Validate module catalog** on the registry branch with `sdk_revision` set to the full commit SHA of the SDK PR in `darkmatter/stackpanel`. If that SDK already consumes modules introduced by the registry PR, pass their space-separated input names in `sdk_module_inputs` (for example `fly javascript nextjs oxlint`). These inputs follow the checkout under test; other SDK dependencies keep their normal pins. To run the same check on `pull_request` before the dispatch workflow is available on `main`, maintainers can set repository variables `STACKPANEL_SDK_REVISION` and `STACKPANEL_SDK_MODULE_INPUTS` temporarily.
+
+For local development, `go run ./cmd/registry-check -sdk-checkout ../stackpanel` uses a companion checkout without publishing an SDK revision. `SDK_MODULE_INPUTS` accepts the same space-separated slugs locally as `sdk_module_inputs` in the workflow.
 
 Once the coordinated check passes, publish the module sources, lock the SDK's dogfood inputs to that published revision, and merge the SDK. Clear any temporary workflow variables and rerun against SDK `main` before publishing a numbered catalog release or embedding an updated snapshot.
 

@@ -25,158 +25,16 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0  # Verify release commits and tags against repository history.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-go@v6
         with:
-          python-version: '3.12'
-      - name: Validate the v1 contract and local module targets
-        run: |
-          cmp registry.v1.json modules.json
-          python -m pip install 'jsonschema[format]==4.23.0'
-          python - <<'PY'
-          import json
-          import subprocess
-          from pathlib import Path
-          from jsonschema import Draft202012Validator as Validator
-
-          schema = json.loads(Path('registry.v1.schema.json').read_bytes())
-          data = json.loads(Path('registry.v1.json').read_bytes())
-          Validator.check_schema(schema)
-          Validator(schema, format_checker=Validator.FORMAT_CHECKER).validate(data)
-          slugs = set()
-          for m in data['modules']:
-              slug = m['slug']
-              assert m['id'] == slug and slug not in slugs, f'ambiguous ID: {slug}'
-              slugs.add(slug)
-              assert m.get('homepage') == f'https://github.com/darkmatter/stackpanel-registry/tree/main/modules/{slug}', f'incorrect homepage: {slug}'
-              versions = {v['version']: v for v in m['versions']}
-              assert len(versions) == len(m['versions']), f'duplicate version: {slug}'
-              latest = versions[m['latestVersion']]
-              assert latest.get('flakePath', 'stackpanelModules.default') == 'stackpanelModules.default', slug
-              for v in m['versions']:
-                  assert v['flakeUrl'] == f'github:darkmatter/stackpanel-registry?dir=modules/{slug}', slug
-                  if v['version'] == 'main':
-                      assert v.get('ref') == 'main', f'invalid development channel: {slug}'
-                  else:
-                      pin = v.get('rev')
-                      if not pin:
-                          tag = v.get('ref')
-                          assert tag and tag != 'main', f'{slug}@{v["version"]} needs an existing tag or commit'
-                          pin = f'refs/tags/{tag}'
-                      # A pin must resolve to this module, not just to an existing object.
-                      subprocess.run(['git', 'cat-file', '-e', f'{pin}^{{commit}}:modules/{slug}/flake.nix'], check=True)
-                  deps = [dep['name'] for dep in v['flakeInputs']]
-                  assert slug not in deps and len(set(deps)) == len(deps), f'colliding inputs: {slug}'
-              if 'readmeUrl' in m:
-                  readme = Path(f'modules/{slug}/README.md')
-                  assert readme.is_file() and m['readmeUrl'] == f'https://raw.githubusercontent.com/darkmatter/stackpanel-registry/main/{readme}', slug
-          on_disk = {p.parent.name for p in Path('modules').glob('*/flake.nix')}
-          assert slugs and slugs == on_disk, f'catalog/flake mismatch: {slugs ^ on_disk}'
-          PY
-      - uses: DeterminateSystems/nix-installer-action@v17
-      - name: Evaluate every candidate with the public Stackpanel SDK
-        shell: bash
+          go-version-file: go.mod
+      - name: Test the registry checker
+        run: go test ./cmd/registry-check
+      - name: Validate catalog and release pins
+        run: go run ./cmd/registry-check -catalog-only
+      - uses: DeterminateSystems/determinate-nix-action@v3.21.8
+      - name: Validate modules and build consumer checks
         env:
           SDK_REVISION: ${{ inputs.sdk_revision || vars.STACKPANEL_SDK_REVISION || 'main' }}
           SDK_MODULE_INPUTS: ${{ inputs.sdk_module_inputs || vars.STACKPANEL_SDK_MODULE_INPUTS }}
-        run: |
-          set -euo pipefail
-          [[ "$SDK_REVISION" == main || "$SDK_REVISION" =~ ^[a-fA-F0-9]{40}$ ]] || { echo 'SDK revision must be main or a full commit SHA'; exit 1; }
-          fixture="$RUNNER_TEMP/registry-validation"
-          mkdir -p "$fixture"
-          cp registry.v1.json "$fixture/"
-          {
-            echo '{'
-            printf '  inputs.stackpanel.url = "github:darkmatter/stackpanel/%s";\n' "$SDK_REVISION"
-            read -ra sdk_modules <<< "$SDK_MODULE_INPUTS"
-            for slug in "${sdk_modules[@]}"; do
-              jq -e --arg slug "$slug" 'any(.modules[]; .slug == $slug)' registry.v1.json >/dev/null
-              printf '  inputs.stackpanel.inputs."%s".follows = "module-%s";\n' "$slug" "$slug"
-            done
-            while IFS=$'\t' read -r slug follows; do
-              printf '  inputs."module-%s".url = "git+file://%s?dir=modules/%s";\n' "$slug" "$GITHUB_WORKSPACE" "$slug"
-              if [[ "$follows" == true ]]; then
-                printf '  inputs."module-%s".inputs.nixpkgs.follows = "stackpanel/nixpkgs";\n' "$slug"
-              fi
-            done < <(jq -r '.modules[] | . as $m | .versions[] | select(.version == $m.latestVersion) | [$m.slug, .followsNixpkgs] | @tsv' registry.v1.json)
-            for suite in rust archetypes languages; do
-              printf '  inputs."test-%s".url = "git+file://%s?dir=tests/%s";\n' "$suite" "$GITHUB_WORKSPACE" "$suite"
-              printf '  inputs."test-%s".inputs.stackpanel.follows = "stackpanel";\n' "$suite"
-            done
-            cat <<'NIX'
-            outputs = { stackpanel, ... }@inputs:
-              let
-                catalog = builtins.fromJSON (builtins.readFile ./registry.v1.json);
-                validate = m:
-                  let
-                    candidate = inputs."module-${m.slug}";
-                    version = builtins.head (builtins.filter (v: v.version == m.latestVersion) m.versions);
-                    pkgs = import stackpanel.inputs.nixpkgs {
-                      system = "x86_64-linux";
-                      overlays = candidate.stackpanelModuleMeta.overlays or [];
-                    };
-                  in
-                  assert builtins.addErrorContext "${m.slug}: catalog followsNixpkgs does not match the flake" (
-                    version.followsNixpkgs == (candidate.stackpanelModuleMeta.followsNixpkgs or false)
-                    && (!version.followsNixpkgs || candidate.inputs ? nixpkgs)
-                  );
-                  {
-                    name = m.slug;
-                    value = builtins.addErrorContext "validating module ${m.slug}" (stackpanel.lib.validateModule {
-                      inherit pkgs;
-                      module = candidate.stackpanelModules.default;
-                      moduleId = m.slug;
-                      inputs = stackpanel.inputs // { "${m.slug}" = candidate; };
-                    });
-                  };
-              in {
-                validated = builtins.listToAttrs (map validate catalog.modules);
-                checks.x86_64-linux = {
-                  inherit (inputs.test-rust.checks.x86_64-linux) rust;
-                  inherit (inputs.test-archetypes.checks.x86_64-linux) archetypes;
-                  inherit (inputs.test-languages.checks.x86_64-linux) language-inputs;
-                };
-              };
-          }
-          NIX
-          } > "$fixture/flake.nix"
-          nix flake lock "path:$fixture"
-          python - "$fixture/flake.lock" <<'PY'
-          import json, sys
-          from pathlib import Path
-
-          lock = json.loads(Path(sys.argv[1]).read_bytes())
-          nodes = lock['nodes']
-          roots = {k.removeprefix('module-'): node for k, node in nodes[lock['root']]['inputs'].items() if k.startswith('module-')}
-          checkout_parents = [[f'module-{slug}'] for slug in roots]
-          for slug, root in roots.items():
-              for dep, child in nodes[root].get('inputs', {}).items():
-                  if dep not in roots or child == [f'module-{dep}']:
-                      continue
-                  # Sibling inputs are named by slug. Verify both their
-                  # directory AND the parent source tree used by Nix.
-                  node = nodes[child] if isinstance(child, str) else {}
-                  locked = node.get('locked', {})
-                  assert node.get('parent') in checkout_parents and (locked.get('type'), locked.get('path'), locked.get('dir', '')) == ('path', f'../{dep}', ''), f'{slug}/{dep} did not resolve to the checkout sibling'
-
-          # Walk concrete candidate dependencies only. A follows array points
-          # outside the subtree (e.g. to stackpanel/nixpkgs); the SDK is
-          # allowed to have its own published registry inputs in its lock.
-          todo = list(roots.values())
-          seen = set()
-          while todo:
-              key = todo.pop()
-              if key in seen:
-                  continue
-              seen.add(key)
-              node = nodes[key]
-              locked = node['locked']
-              assert (locked.get('owner'), locked.get('repo')) != ('darkmatter', 'stackpanel-registry'), f'{key} used the published registry in a candidate subtree'
-              todo.extend(child for child in node.get('inputs', {}).values() if isinstance(child, str))
-          PY
-          nix eval --no-update-lock-file --json "path:$fixture#validated" | jq -e 'length > 0 and all(.[]; . == true)'
-      - name: Build consumer checks against the same SDK
-        run: |
-          fixture="path:$RUNNER_TEMP/registry-validation"
-          nix build --no-update-lock-file --no-link --print-build-logs \
-            "$fixture#checks.x86_64-linux.rust" "$fixture#checks.x86_64-linux.archetypes" \
-            "$fixture#checks.x86_64-linux.language-inputs"
+        run: go run ./cmd/registry-check
