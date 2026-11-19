@@ -1,0 +1,8 @@
+:root { color-scheme: light dark; font: 1rem/1.5 system-ui, sans-serif; }
+body { margin: 0; background: var(--background, Canvas); color: var(--foreground, CanvasText); }
+main { padding: 1rem; }
+h1 { margin: 0; font-size: 1.2rem; }
+#scope { color: var(--muted-foreground, GrayText); }
+#controls:not([hidden]) { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
+button, select { font: inherit; padding: .3rem .6rem; border-radius: .35rem; color: inherit; background: var(--background, Canvas); border: 1px solid var(--border, ButtonBorder); }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; }

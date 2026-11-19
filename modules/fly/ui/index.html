@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Fly.io deployments</title>
+    <link rel="stylesheet" href="./panel.css">
+    <script defer src="./panel.js"></script>
+  </head>
+  <body>
+    <main>
+      <h1>Fly.io deployments</h1>
+      <p id="scope" role="status">Loading project deployments…</p>
+      <div id="controls" hidden>
+        <label for="app">Application</label>
+        <select id="app"></select>
+        <button id="status" type="button">Check live status</button>
+      </div>
+      <pre id="output" aria-live="polite"></pre>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,40 @@
+name: Validate module catalog
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sdk_revision:
+        description: 'Stackpanel SDK commit SHA (default: repository variable STACKPANEL_SDK_REVISION, otherwise main)'
+        type: string
+      sdk_module_inputs:
+        description: 'Bootstrap only: space-separated SDK input names to follow from this registry checkout'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0  # Verify release commits and tags against repository history.
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Test the registry checker
+        run: go test ./cmd/registry-check
+      - name: Validate catalog and release pins
+        run: go run ./cmd/registry-check -catalog-only
+      - uses: DeterminateSystems/determinate-nix-action@v3.21.8
+      - name: Validate modules and build consumer checks
+        env:
+          SDK_REVISION: ${{ inputs.sdk_revision || vars.STACKPANEL_SDK_REVISION || 'main' }}
+          SDK_MODULE_INPUTS: ${{ inputs.sdk_module_inputs || vars.STACKPANEL_SDK_MODULE_INPUTS }}
+        run: go run ./cmd/registry-check

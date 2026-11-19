@@ -1,0 +1,27 @@
+{
+  "nodes": {
+    "foundry": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1794812961,
+        "narHash": "sha256-qOvRu1JJNABAhyDf4n/Vxy0ZbWDhrw2IDEXguuEpEXo=",
+        "owner": "shazow",
+        "repo": "foundry.nix",
+        "rev": "6e034717008aa783f7436a6b62c3f7eca3040d4a",
+        "type": "github"
+      },
+      "original": {
+        "owner": "shazow",
+        "repo": "foundry.nix",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "foundry": "foundry"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}
